@@ -1,0 +1,282 @@
+GWT et sécurité, se prémunir des CSRF
+
+<h2>Préambule</h2>
+Les applications Web enrichies, utilisant JavaScript pour mettre à jour tout ou partie d’une page web, sont officiellement nées en 2005 avec l’apparition du terme Ajax, et sont aujourd’hui communes. De ce concept sont ensuite nées les applications JavaScript « Single Page Interface », modèle dans lequel rentre l’application typique GWT. Le framework propose aujourd’hui un modèle de programmation au juste milieu entre les paradigmes du développement RDA (pour <a title="Rich Desktop Application sur Wikipedia" href="http://fr.wikipedia.org/wiki/Rich_Desktop_Application" target="_blank">Rich Desktop Application</a>) et du développement Web. Après compilation, une application GWT devient une application JavaScript tout à fait standard du point du vue du browser.
+
+Les applications Ajax n’introduisent pas de <em>nouvelles</em> failles de sécurité. Techniquement, les risques et les techniques d’exploitation sont les mêmes. Si certaines failles sont affaiblies par le modèle, d’autres ont vu leur terrain de jeu évoluer.
+
+Le but de cet article et d'un autre à venir est de rappeler les failles de sécurité qui concernent tout particulièrement la portion JavaScript – et donc GWT – de nos applications Web, puis de présenter les réponses qu’il convient de mettre en œuvre dans une application GWT pour contrecarrer les éventuelles attaques.
+
+<!--more-->
+
+En point de départ, nous nous appuierons sur l’<a title="Site officiel de l'OWASP" href="https://www.owasp.org/" target="_blank">OWASP</a> &amp; son <a title="OWASP Top 10 2010 des failles des applications Web" href="https://www.owasp.org/index.php/Top_10_2010" target="_blank">top ten 2010</a> des failles de sécurité des applications Web :
+<ol>
+	<li><a title="Top 10 2010-A1" href="https://www.owasp.org/index.php/Top_10_2010-A1" target="_blank">Injection</a></li>
+	<li><a title="Top 10 2010-A2" href="https://www.owasp.org/index.php/Top_10_2010-A2" target="_blank">Cross-Site Scripting (XSS)</a></li>
+	<li><a title="Top 10 2010-A3" href="https://www.owasp.org/index.php/Top_10_2010-A3" target="_blank">Broken Authentication and Session Management</a></li>
+	<li><a title="Top 10 2010-A4" href="https://www.owasp.org/index.php/Top_10_2010-A4" target="_blank">Insecure Direct Object References</a></li>
+	<li><a title="Top 10 2010-A5" href="https://www.owasp.org/index.php/Top_10_2010-A5" target="_blank">Cross-Site Request Forgery (CSRF)</a></li>
+	<li><a title="Top 10 2010-A6" href="https://www.owasp.org/index.php/Top_10_2010-A6" target="_blank">Security Misconfiguration</a></li>
+	<li><a title="Top 10 2010-A7" href="https://www.owasp.org/index.php/Top_10_2010-A7" target="_blank">Insecure Cryptographic Storage</a></li>
+	<li><a title="Top 10 2010-A8" href="https://www.owasp.org/index.php/Top_10_2010-A8" target="_blank">Failure to Restrict URL Access</a></li>
+	<li><a title="Top 10 2010-A9" href="https://www.owasp.org/index.php/Top_10_2010-A9" target="_blank">Insufficient Transport Layer Protection</a></li>
+	<li><a title="Top 10 2010-A10" href="https://www.owasp.org/index.php/Top_10_2010-A10" target="_blank">Unvalidated Redirects and Forwards</a></li>
+</ol>
+Deux de ces failles potentielles nous concernent tout particulièrement dans une couche Ajax : les failles XSS [2] et CSRF [5]. Elles auront dans ce contexte la particularité sympathique de rendre l'application vulnérable quelles que soient les protections mises en place uniquement côté serveur. Leur compréhension et la connaissance des mécanismes de protection par le développeur sont donc essentielles. Dans ce premier article, nous nous focaliserons sur les attaques de type CSRF.
+
+A l'écriture de ces lignes, la version courante de GWT est la 2.4.
+<h2>CSRF : Cross Site Request Forgery</h2>
+<em>Traduire avec élégance par "falsification de requête inter-site".</em>
+
+Une attaque CSRF consiste à utiliser les autorisations qu’a un utilisateur sur un site donné contre son gré. Il s’agit de construire sur un domaine sous le contrôle de l’attaquant une requête vers le site attaqué ; la requête sera soumise par le browser de l’utilisateur victime, et exécutée avec les droits de ce dernier. Si le cookie permet de s’assurer que la requête provient du browser du bon utilisateur, il ne permet pas de vérifier que l’appel provient du bon site...
+<h3>La same origin policy</h3>
+Petit rappel des règles du jeu. Tout browser se doit de restreindre les capacités de JavaScript à la same origin policy. Cette règle rend impossible un appel asynchrone via XMLHttpRequest sur un autre domaine. Toute manipulation du DOM est aussi restreinte : une iframe ayant pour source une page sur un autre domaine ne sera ni lisible ni pilotable par un script de la page parente.
+
+Il s’agit bien d’empêcher la lecture d’une requête provenant d’un autre domaine : initier la requête est possible (et heureusement), pas <em>traiter</em> son résultat. C’est sur cet état de fait que s’appuient les attaques CSRF.
+<h3>Une attaque CSRF typique : c’est l’histoire d’un steak</h3>
+Plantons le décor. Ghislain est boucher, sur son site <em>myboucher.com</em>, il vend des bavettes. Georges, qui possède une brasserie, est son premier client. Richard est boucher lui aussi, mais jalouse Ghislain. A ses heures perdues, il lit des articles underground de l’internet mondial. Et agit secrètement sur <em>iamthevilain.com</em>.
+
+Voici l'histoire de son attaque contre le site de Ghislain. Georges est sa première victime.
+
+<a href="http://blog.octo.com/wp-content/uploads/2011/12/csrf-big.jpg" rel="lightbox"><img title="CSRF" src="http://blog.octo.com/wp-content/uploads/2011/11/csrf.jpg" alt="Le scénario d'une attaque CSRF" width="600" height="292" /></a>
+<ol>
+	<li>Georges se connecte sur <em>myboucher.com</em>. Il s’authentifie : login/mot de passe, qui ne seront pas divulgués dans cet article. Son browser reçoit alors un cookie de session ; ce dernier sera systématiquement envoyé par toute requête sur myboucher.com</li>
+	<li>Ce qu’il a fait sur <em>myboucher.com</em> précisément ne nous regarde pas, mais il ne s'est pas déconnecté. Plus tard, du fait d'un mail d'origine inconnue, il atterri sur la page <em>http://iamthevilain.com/hack-myboucher.action</em> . Sur cette page se trouve un formulaire qui correspond très précisément à celui qui est existe sur <em>myboucher.com</em> pour supprimer l'intégralité des informations du compte de l'utilisateur courant. Les champs sont identiques, et l'attribut HTML <em>action</em> du formulaire pointe sur la page correspondant à la suppression sur <em>myboucher.com</em>. Le formulaire est placé dans une frame invisible.</li>
+	<li>Un code JavaScript soumet automatiquement le formulaire, en JavaScript, sans que Georges ne fasse quoi que ce soit. Une requête POST parfaitement valide, ordonnant une suppression de compte est alors soumise à <em>myboucher.com</em>, avec le cookie qui authentifie Georges. Notre brasseur n’a plus de compte, et du fait de la frame, il ne s’est aperçu de rien.
+Ghislain perd bon nombre de ses comptes utilisateurs, sans pouvoir fournir à ces derniers la moindre explication.</li>
+</ol>
+Il est à noter que l’attaque CSRF n’a de sens que sur des utilisateurs connectés avec des droits spécifiques (dans 99,72% des cas). D'ailleurs, elle est d’autant plus dévastatrice que la victime a de droits sur le site. L’ensemble des protections est basé sur le fait que la victime potentielle dispose d’une session sur le serveur.
+<h3>CSRF &amp; HTTP</h3>
+Dans le scenario ci-dessus, j’ai volontairement pris l’exemple d’une action nécessitant une requête POST. L’attaque CSRF la plus basique se base sur une requête GET. En effet, pour faire une requête GET sur un autre domaine sans que l’utilisateur ne puisse s’en apercevoir, il suffit d’utiliser une frame, une image… C'est possible dans un simple mail !
+
+Sauf qu'une telle attaque CSRF ne devrait pas avoir de sens : une action d’<em>écriture</em> ne devrait jamais être faite via une requête GET. Une requête GET doit toujours pouvoir être exécutée sans mettre en question l’intégrité de vos données. C’est un des principes de HTTP (cf. la <a title="RFC HTTP au sujet des requêtes GET" href="http://tools.ietf.org/html/rfc2616#section-9.1.1" target="_blank">RFC</a>), sur lequel est basée la conception des moteurs de recherche, des browsers, etc… Par exemple, un browser aura le droit de précharger les ressources trouvées en lien sur une page : imaginez les dégâts d’un simple lien "supprimer mon compte". Derrière ce lien devrait en fait se cacher un formulaire HTML et une requête POST. Pour cette raison, ce sont uniquement les requêtes POST que nous voudrons protéger.
+<h3>Utiliser le referer ? Non</h3>
+Dans la définition d'HTTP se trouve un champ de header destiné à contenir l'URL de la page qui a initié la requête pour le browser, il s'agit du referer. C'est ce champ qui permet par exemple aux outils de statistiques de dire d'où vient un visiteur. On pourrait dès lors vouloir s'appuyer sur ce champ pour se prémunir des CSRF. Lors d'une soumission de formulaire depuis un site étranger, le referer devrait <em>normalement</em> contenir l'url de la page dans laquelle se trouvait le formulaire initial. C'est ce "<em>normalement</em>" qui nous arrêtera là. Dans la pratique, le referer ne sera pas toujours alimenté, de plus, certaines versions d'Internet Explorer et du player Flash contiennent des failles permettant la construction d'attaque CSRF avec manipulation des headers.
+<h3>Les techniques de protection.</h3>
+Dans une application WEB standard, les requêtes POST sont soumises par les formulaires, et la protection aux CSRF passe par l’utilisation d’un jeton. Ce dernier est généré de façon non prédictive côté serveur, et conservé dans la session utilisateur (ou directement construit à partir de l’identifiant de session, typiquement un hash). Il est donc associé à une session donnée. Lors de la construction d'un formulaire dans une page HTML, toujours côté serveur, il est injecté dans un champ caché (<em>&lt;input type="hidden" ... /&gt;</em>). Sa présence est vérifiée à la soumission du formulaire. Du fait de la same origin policy, il est impossible à l'attaquant potentiel de récupérer un jeton. Il ne peut dès lors plus construire un formulaire contenant un jeton valide pour une quelconque session existante.
+
+Les applications Ajax utilisent l'objet XMLHttpRequest pour faire des appels HTTP sans recharger la page web, et traiter le résultat de façon asynchrone. Si elles ne sont pas faites de la même façon, il s'agit des mêmes requêtes POST que celles des formulaires. La technique de protection sera la même, et il faudra utiliser un jeton conservé en session. XMLHttpRequest permettant la manipulation des headers HTTP, cette capacité sera souvent utilisée pour glisser le jeton dans un header dédié et ne pas polluer le corps de requête.
+
+La plupart des frameworks web classique récents (Rails, Django, Symfony, ASP.NET MVC, ou encore Seam dans le monde Java, dont les frameworks sont plus globalement de mauvais élèves) proposent une solution de jeton intégrée aux formulaires, plus ou moins transparente pour le développeur. A contrario, les frameworks JavaScript, s’ils simplifient généralement les opérations de requêtes asynchrones, n’apportent pas de solution prémâchée. « Normal », puisque cette intégration passe aussi par l’implémentation côté serveur. A noter le cas de Rails, qui intègre nativement une protection pour la partie Javascript : le token est fourni via une balise dans le HTML, et l'objet JavaScript XMLHttpRequest est enrichi par le framework pour que le token soit systématiquement glissé dans les headers HTTP. Comme pour un formulaire standard, l'ensemble est totalement transparent pour le développeur !
+
+GWT dans cet environnement a un côté vicieux. Le développeur GWT écrit bien souvent des requêtes RPC, et "ignore" le fait que ces requêtes sont techniquement des requêtes POST tout à fait standards, utilisant l'objet XMLHttpRequest. On pourra d'ailleurs faire un rapide aparté sur les applications basée sur Flash, et donc Flex, qui utilisent les mêmes requêtes, sans que les frameworks communément utilisés ne poussent de solution intégrée.
+<h3>Que faire avec GWT ?</h3>
+<h4>GWT-RPC</h4>
+Il convient tout d’abord de souligner que GWT propose nativement une première ligne de défense en RPC. Le nom d'un des fichiers chargés par le bootstrap interne GWT (pour être plus précis, le nom de la permutation correspondante dans le mécanisme de <a title="Deferred Binding" href="http://code.google.com/webtoolkit/doc/latest/DevGuideCodingBasics.html#DevGuideDeferredBinding" target="_blank">Deferred Binding</a> du compilateur) est systématiquement envoyé dans un header HTTP dédié lors de toute requête RPC (qui est encore une fois une requête faite via XMLHttpRequest). En son absence ou cas de valeur inattendue, la servlet lance une <em>SecurityException</em> ; le traitement s'arrête là. Ce simple ajout du header complique la tâche au potentiel attaquant. En effet, l'attaque CSRF par requête POST passe par la soumission d'un formulaire, le XMLHttpRequest cross-domain est interdit. Or l'ajout d'un header HTTP n'est pas possible dans un formulaire HTML.
+
+Cependant, comme nous l'avons vu lors de l'élimination du referer dans notre stratégie de sécurisation, des configurations permettront cet ajout. Il ne suffit donc pas pour une protection exhaustive.
+
+Depuis sa version 2.3, le framework propose un mécanisme plus complet. C’est un hash MD5 de l’identifiant de session qui est envoyé avec les requêtes RPC, sa présence est automatiquement contrôlée par le service GWT. L'interface d'un service protégé et son implémentation hériteront respectivement d'une interface et d'une classe spécifique. Enfin, une servlet sera dédiée à la récupération du jeton. La mise en place exacte d'un service RPC jouissant de ce mécanisme passe par les opérations suivantes :
+<h5>Définition de l'interface du service</h5>
+<pre class="brush:java">// à noter que les développeurs GWT ont préféré l'appellation XSRF - plus rare - à CSRF
+public interface SecuredService extends XsrfProtectedService {
+	void doSomethingReallyImportant();
+}</pre>
+<h5>Implémentation du service</h5>
+<pre class="brush:java">public class SecuredServiceImpl extends XsrfProtectedServiceServlet implements SecuredService{
+
+    @Override
+    public void doSomethingReallyImportant() {
+        yeahNowWeAreReallyGonnaDoIt();
+    }
+
+    // [...]
+
+}</pre>
+<h5>Déclaration de la servlet délivrant le jeton (token)</h5>
+Dans le web.xml :
+<pre class="brush:xml">&lt;context-param&gt;
+	&lt;param-name&gt;gwt.xsrf.session_cookie_name&lt;/param-name&gt;
+	&lt;param-value&gt;JSESSIONID&lt;/param-value&gt;
+&lt;/context-param&gt;&lt;servlet&gt;
+	&lt;servlet-name&gt;XsrfTokenServiceServlet&lt;/servlet-name&gt;
+	&lt;servlet-class&gt;com.google.gwt.user.server.rpc.XsrfTokenServiceServlet&lt;/servlet-class&gt;
+&lt;/servlet&gt;
+&lt;servlet-mapping&gt;
+	&lt;servlet-name&gt;XsrfTokenServiceServlet&lt;/servlet-name&gt;
+	&lt;url-pattern&gt;/xsrfTokenService&lt;/url-pattern&gt;
+&lt;/servlet-mapping&gt;</pre>
+<h5>Définition du nom du cookie à utiliser</h5>
+Le nom du cookie à utiliser est aussi déclaré dans le web.xml. Au besoin il serait possible de créer un cookie dédié à cela, indépendamment de la session.
+<pre class="brush:xml">&lt;context-param&gt;
+	&lt;param-name&gt;gwt.xsrf.session_cookie_name&lt;/param-name&gt;
+	&lt;param-value&gt;session-id&lt;/param-value&gt;
+&lt;/context-param&gt;</pre>
+<h5>Utilisation du service sécurisé</h5>
+L'utilisation du mécanisme se fait en deux phases dans le code GWT. Il faut d'abord récupérer et stocker quelque part le jeton.
+<pre class="brush:java">private XsrfToken xsrfToken;
+
+public void fetchXsrfToken() {
+	XsrfTokenServiceAsync xsrfTokenService = GWT.create(XsrfTokenService.class);
+		// ces interfaces sont fournies par le SDK avec la servlet
+
+	((ServiceDefTarget) xsrfTokenService).setServiceEntryPoint("xsrfTokenService"); // défini
+	xsrfTokenService.getNewXsrfToken(new AsyncCallback() {
+		public void onSuccess(XsrfToken result) {
+			xsrfToken = result;
+		}
+
+		public void onFailure(Throwable caught) {
+			// une RpcTokenException peut notamment être levée si le cookie
+			// est inexistant ou vide
+
+			// [...]
+		}
+	});
+}</pre>
+Il doit ensuite être injecté aux instances de services d'appel asynchrone.
+<pre class="brush:java">SecuredServiceAsync securedService = GWT.create(SecuredService.class);
+((HasRpcToken) securedService).setRpcToken(xsrfToken);
+securedService.doSomethingReallyImportant(new AsyncCallback() {
+	@Override
+	public void onFailure(Throwable caught) {
+		// [...]
+	}
+
+	@Override
+	public void onSuccess(Void result) {
+		// [...]
+	}
+});</pre>
+Tous les détails sont documentés dans la Javadoc de la servlet XsrfTokenServiceServlet.
+<h4>L’utiliser, ou pas ?</h4>
+Cette même Javadoc commence par l'avertissement suivant :
+<blockquote><em>EXPERIMENTAL and subject to change. Do not use this in production code</em></blockquote>
+Il est fort probable que les développeurs de GWT souhaitent l’intégrer de façon plus transparente, plus élégante et plus propre au framework. On pourrait entre autres générer le hash MD5 du cookie côté GWT.
+
+Que faire en attendant ? Notre préconisation est de préférer l’utilisation de ces classes « expérimentales » si vous souhaitez vous défendre contre ce type d'attaque. Une implémentation de votre cru fera le job, mais vous n'y gagnerez rien. Si une version future de GWT propose une solution mieux intégrée, nul doute que le refactoring sera mineur...
+
+Si jamais, pour une raison ou une autre (je pense notamment au refactoring d'une application existante), la récupération asynchrone du jeton vous pose problème, l'objet <a title="Javadoc Dictionary" href="http://google-web-toolkit.googlecode.com/svn/javadoc/latest/com/google/gwt/i18n/client/Dictionary.html" target="_blank">Dictionary</a> permet de récupérer une variable définie dans la page HTML hôte de l'application GWT. Il suffit alors de délivrer cette page via une servlet (ou autre si vous avez déjà...) et d'y injecter le jeton.
+<h3>RequestBuilder et RequestFactory</h3>
+Un petit avantage des applications Ajax pour lutter contre les CSRF est, encore une fois, que l'objet XMLHttpRequest permet la manipulation des headers HTTP. Utiliser le header pour y glisser un champ dédié à notre jeton sera plus pratique qu’une variable dans le corps de la requête – qui restera dédié à la donnée.
+
+RequestBuilder est le pendant de XMLHttpRequest du monde JavaScript, c'est la classe qui permet de faire des requête GET ou POST "à la main". Par rapport au XMLHttpRequest initial, RequestBuilder n'est qu'une façade qui reprend une syntaxe plus proche de ce que l'on trouvera dans le monde Java, mais uniquement côté client. De ce fait, elle permet l'utilisation de GWT avec des stacks autres que Java côté serveur.
+
+RequestFactory est l'API proposée avec la version 2.1 de GWT en alternative à RPC. Son principal atout aujourd'hui : elle manipule des DTO outillés, de telle façon qu'une opération save(myDto) ne fera transiter dans la requête HTTP que les champs effectivement modifiés de l'objet.
+
+Contrairement à RPC le framework ne gère seul le jeton ni pour RequestBuilder ni pour RequestFactory. L'opération préconisée sera d'utiliser un champ de header pour RequestBuilder, afin de ne pas polluer le corps de la requête. Dans le cas de RequestFactory, la séparation headers/corps de requête est en fait moins substantielle, du fait de la forme déjà spécifique du corps de requête. L'exemple donné passe cependant par un header.
+
+Notre préconisation sera d'utiliser au maximum l'outillage existant pour RPC, il tient la route et cela semble une bonne stratégie en cas de positionnement futur du framework pour la sécurisation des RequestBuilder et RequestFactory (bien sûr, si vous utilisez RequestBuilder avec autre chose que Java côté serveur, cette remarque n'est pas à prendre en compte).
+<h4>Pour RequestBuilder</h4>
+<h5>Côté client</h5>
+Comme en RPC, il conviendra tout d'abord de récupérer le token (pour cela, voir le code fourni pour le mécanisme RPC), puis d'injecter le header :
+<pre class="brush:java">RequestBuilder requestBuilder = new RequestBuilder(RequestBuilder.POST, "");
+requestBuilder.setHeader("X-XSRF-Cookie", xsrfToken.getToken());
+requestBuilder.sendRequest(null, new RequestCallback() {
+	@Override
+	public void onResponseReceived(Request request, Response response) {
+		// [...]
+	}
+
+	@Override
+	public void onError(Request request, Throwable exception) {
+		// [...]
+	}
+});</pre>
+Dans le cas d'un serveur non-Java, deux solutions : générer le MD5 en utilisant un script JS trouvé sur le net (les principaux frameworks n'en proposent pas, mais voir par exemple <a title="MD5 en JavaScript" href="http://actuel.fr.selfhtml.org/articles/javascript/md5/index.htm" target="_blank">ici</a>), ou procéder au hashage côté serveur et le redescendre côté client (comme avec RPC, en asynchrone ou via l'objet <a title="Javadoc Dictionary" href="http://google-web-toolkit.googlecode.com/svn/javadoc/latest/com/google/gwt/i18n/client/Dictionary.html" target="_blank">Dictionary</a> et la page HTML hôte).
+<h5>Côté serveur</h5>
+Voici un exemple avec une simple servlet Java. La validation est grandement reprise du code utilisé pour RPC, et exploite les même classes utilitaires fournies par GWT :
+<pre class="brush:java">public class SecuredServlet extends HttpServlet {
+
+	@Override
+	protected void service(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+		validateXsrfToken(request);
+		super.service(request, response);
+	}
+
+	protected void validateXsrfToken(HttpServletRequest request) throws RpcTokenException {
+		// RpcTokenException est propre à GWT
+
+		String xsrfToken = request.getHeader("XSRF-Token");
+			// le header que nous avons injecté
+		if (xsrfToken == null) {
+			throw new RpcTokenException("XSRF token missing");
+		}
+
+		Cookie sessionCookie = Util.getCookie(request, "session-id", false);
+			// com.google.gwt.user.server.Util est une classe utilitaire interne GWT
+		if (sessionCookie == null || sessionCookie.getValue() == null || sessionCookie.getValue().length() == 0) {
+			throw new RpcTokenException("Session cookie is missing or empty! " + "Unable to verify XSRF cookie");
+		}
+		String expectedToken = Utility.toHexString(Utility.getMd5Digest(sessionCookie.getValue().getBytes()));
+			// de com.google.gwt.util.tools.Utility ...
+
+		if (!expectedToken.equals(xsrfToken)) {
+			throw new RpcTokenException("Invalid XSRF token");
+		}
+	}
+
+	// [...]
+
+}</pre>
+<h4>Pour RequestFactory</h4>
+<h5>Côté client</h5>
+Etendre DefaultRequestTransport pour injecter le header :
+<pre class="brush:java">public class SecuredRequestTransport extends DefaultRequestTransport {
+
+	protected XsrfToken xsrfToken;
+
+	public SecuredRequestTransport(XsrfToken xsrfToken) {
+		this.xsrfToken = xsrfToken;
+	}
+
+	@Override
+	protected void configureRequestBuilder(RequestBuilder builder) {
+		super.configureRequestBuilder(builder);
+		builder.setHeader("XSRF-Token", xsrfToken.getToken());
+	}
+}</pre>
+A noter qu'on aurait pu aussi enrichir le corps de requête, comme dit plus haut.
+
+Utiliser ensuite une instance de notre SecuredRequestTransport au lieu de DefaultRequestTransport avec nos RequestFactory :
+<pre class="brush:java">EventBus eventBus = new SimpleEventBus();
+SecuredRequestTransport securedRequestTransport = new SecuredRequestTransport(xsrfToken);
+MyRequestFactory myRequestFactory = GWT.create(MyRequestFactory.class);
+myRequestFactory.initialize(eventBus, securedRequestTransport);</pre>
+<h5>Côté serveur</h5>
+Côté serveur, il sera nécessaire de créer une classe héritant de RequestFactoryServlet. Le code est strictement le même que l'exemple donné pour RequestBuilder, le validateXsrfToken() peut être appelé dans un <em>doPost()</em> enrichi (au lieu de <em>service()</em>).
+<pre class="brush:java">public class SecuredRequestFactoryServlet extends RequestFactoryServlet {
+
+	@Override
+	protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+		validateXsrfToken(request);
+		super.doPost(request, response);
+	}
+
+	// ce code est strictement le même que pour la SecuredServlet plus haut
+	protected void validateXsrfToken(HttpServletRequest request) throws RpcTokenException {
+		// RpcTokenException est propre à GWT
+
+		String xsrfToken = request.getHeader("XSRF-Token");
+			// le header que nous avons injecté
+		if (xsrfToken == null) {
+			throw new RpcTokenException("XSRF token missing");
+		}
+
+		Cookie sessionCookie = Util.getCookie(request, "session-id", false);
+			// com.google.gwt.user.server.Util est une classe utilitaire interne GWT
+		if (sessionCookie == null || sessionCookie.getValue() == null || sessionCookie.getValue().length() == 0) {
+			throw new RpcTokenException("Session cookie is missing or empty! " + "Unable to verify XSRF cookie");
+		}
+		String expectedToken = Utility.toHexString(Utility.getMd5Digest(sessionCookie.getValue().getBytes()));
+			// de com.google.gwt.util.tools.Utility ...
+
+		if (!expectedToken.equals(xsrfToken)) {
+			throw new RpcTokenException("Invalid XSRF token");
+		}
+	}
+
+	// [...]
+
+}</pre>
+Dans le web.xml, déclarer cette servlet au lieu de RequestFactoryServlet.
+<h3>Conclusion</h3>
+Les CSRF rentrent dans la catégorie des failles qui doivent être connues du développeur qui manipule un framework de présentation quel qu'il soit. Étonnamment, nombre de frameworks font preuve de peu de maturité dans l'intégration de solutions pour s'en prémunir.
+
+GWT permet de mettre en place des solutions relativement facile à maintenir et à surveiller. Les failles sont peut-être plus complexes à appréhender, mais sont aussi plus faciles à isoler avec une application riche qu'avec une application web standard. De même, une application GWT existante à sécuriser devrait aisément se refactorer.
+
+Certains frameworks, notamment Rails, résilient la session en cas de jeton attendu non détecté, ce qui peut constituer une sécurité supplémentaire. La RpcTokenException de GWT pourrait par ailleurs nous permettre de prévenir l'utilisateur d'une probable tentative d'attaque, via une alerte JavaScript <a title="GWT Window.alert()" href="http://google-web-toolkit.googlecode.com/svn/javadoc/latest/com/google/gwt/user/client/Window.html#alert%28java.lang.String%29" target="_blank">Window.alert()</a>, afin de sortir d'une éventuelle frame cachée.
+
+En cas de besoin, dans une démarche de qualité, on pourra chercher à l'aide d'un outil comme Sonar des traces de non respects de la marche à suivre. Par exemple en vérifiant que nos interfaces de service RPC héritent de XsrfProtectedService et non plus de RemoteService. Ou encore en créant une classe SecuredRequestBuilder dont le constructeur exige le jeton, et vérifier que la RequestBuilder standard n'est plus utilisée.
+
+Un prochain article abordera les failles XSS, les solutions proposées par le framework pour s'en prémunir, et traitera rapidement des autres points top 10 OWASP dans le contexte d'une application GWT.
